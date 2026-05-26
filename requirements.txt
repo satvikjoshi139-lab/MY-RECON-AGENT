@@ -1,0 +1,6 @@
+langchain
+langgraph
+langchain-groq
+pydantic
+aiohttp
+python-dotenv

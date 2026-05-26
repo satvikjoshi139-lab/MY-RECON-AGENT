@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🔍 Multi‑Agent Cyber Recon Scanner</title>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; max-width: 950px; margin: 2rem auto; padding: 0 1.5rem; background: #f0f2f5; color: #1e293b; }
+    h1 { color: #0f172a; }
+    .box { background: white; padding: 1.5rem; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); margin-bottom: 1.5rem; }
+    .flex-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    input, select, button { font-size: 1rem; padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid #cbd5e1; }
+    input { flex: 1; min-width: 200px; }
+    button { background: #0ea5e9; color: white; border: none; cursor: pointer; font-weight: 600; }
+    button:hover { background: #0284c7; }
+    button:disabled { background: #94a3b8; cursor: not-allowed; }
+    .btn-danger { background: #ef4444; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-outline { background: transparent; color: #0ea5e9; border: 1px solid #0ea5e9; }
+    .btn-outline:hover { background: #e0f2fe; }
+    #targetList { list-style: none; padding: 0; margin: 1rem 0 0 0; }
+    #targetList li { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid #e2e8f0; }
+    #report { background: #1e293b; color: #f8fafc; padding: 1.5rem; border-radius: 12px; white-space: pre-wrap; font-family: monospace; max-height: 70vh; overflow-y: auto; }
+    .error { color: #dc2626; }
+    .loading { color: #6366f1; }
+    .status-item { font-size: 0.9rem; margin: 0.25rem 0; }
+    .done { color: #16a34a; }
+    .fail { color: #dc2626; }
+
+    .risk-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-weight: 600;
+      margin-left: 1rem;
+    }
+    .risk-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .risk-high { background: #dc2626; }
+    .risk-medium { background: #f59e0b; }
+    .risk-low { background: #16a34a; }
+    .risk-info { background: #6366f1; }
+  </style>
+</head>
+<body>
+  <h1>🤖 Multi‑Agent Cyber Recon Scanner</h1>
+
+  <div class="box">
+    <label><strong>Add website / IP to scan:</strong></label>
+    <div class="flex-row" style="margin-top:0.5rem;">
+      <input type="text" id="newTarget" placeholder="example.com" value="">
+      <button onclick="addTarget()">➕ Add</button>
+    </div>
+    <ul id="targetList"></ul>
+    <div class="flex-row" style="margin-top:0.75rem;">
+      <select id="scanType">
+        <option value="quick">🔍 Recon – Quick</option>
+        <option value="full">🔍 Recon – Full</option>
+        <option value="ai_demo">🤖 AI Security Demo</option>
+      </select>
+      <button id="scanAllBtn" onclick="scanAll()">🚀 Scan All</button>
+      <button id="stopBtn" onclick="stopAll()" disabled>⏹ Stop</button>
+      <button class="btn-outline" onclick="clearTargets()">🗑 Clear All</button>
+    </div>
+    <div id="globalStatus" style="margin-top:0.5rem;"></div>
+  </div>
+
+  <div class="box">
+    <h2>📋 Report <span id="riskIndicator" class="risk-badge" style="display:none;"></span></h2>
+    <pre id="report">[ Scan results will appear here ]</pre>
+  </div>
+
+  <script>
+    // Use relative URL during local dev (vercel dev), full URL in production
+    const API_URL = "/api/scan";
+
+    let targets = [];
+    let abortControllers = [];
+
+    function renderTargetList() {
+      const list = document.getElementById('targetList');
+      list.innerHTML = '';
+      targets.forEach((t, index) => {
+        const li = document.createElement('li');
+        li.innerHTML = `
+          <span>🎯 ${t}</span>
+          <button class="btn-danger" onclick="removeTarget(${index})" style="padding:0.3rem 0.8rem;">✕</button>
+        `;
+        list.appendChild(li);
+      });
+    }
+
+    function addTarget() {
+      const input = document.getElementById('newTarget');
+      const value = input.value.trim();
+      if (!value) return alert("Enter a domain or IP.");
+      if (targets.includes(value)) {
+        alert("Target already in list.");
+        return;
+      }
+      targets.push(value);
+      input.value = '';
+      renderTargetList();
+    }
+
+    function removeTarget(index) {
+      targets.splice(index, 1);
+      renderTargetList();
+    }
+
+    function clearTargets() {
+      if (abortControllers.length > 0) {
+        if (!confirm('Scans are running. Stop them and clear all targets?')) return;
+        stopAll();
+      }
+      targets = [];
+      renderTargetList();
+      document.getElementById('report').textContent = '[ Scan results will appear here ]';
+      document.getElementById('globalStatus').textContent = '';
+      document.getElementById('riskIndicator').style.display = 'none';
+    }
+
+    function setRiskBadge(risk) {
+      const badge = document.getElementById('riskIndicator');
+      let colorClass = '';
+      let text = '';
+      if (risk === 'high') {
+        colorClass = 'risk-high';
+        text = '⚠️ High Risk – Critical vulnerabilities found';
+      } else if (risk === 'medium') {
+        colorClass = 'risk-medium';
+        text = '⚡ Medium Risk – Some issues detected';
+      } else if (risk === 'low') {
+        colorClass = 'risk-low';
+        text = '✅ Low Risk – No significant threats';
+      } else {
+        colorClass = 'risk-info';
+        text = 'ℹ️ Demo / Information';
+      }
+      badge.innerHTML = `<span class="risk-dot ${colorClass}"></span> ${text}`;
+      badge.style.display = 'inline-flex';
+    }
+
+    async function scanAll() {
+      const scanType = document.getElementById('scanType').value;
+
+      if (scanType === "ai_demo") {
+        targets = ["demo"];
+      } else if (targets.length === 0) {
+        alert("Add at least one target.");
+        return;
+      }
+
+      const globalStatus = document.getElementById('globalStatus');
+      const reportPre = document.getElementById('report');
+      const scanAllBtn = document.getElementById('scanAllBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      const riskBadge = document.getElementById('riskIndicator');
+
+      reportPre.textContent = '';
+      globalStatus.innerHTML = '';
+      riskBadge.style.display = 'none';
+      scanAllBtn.disabled = true;
+      stopBtn.disabled = false;
+      abortControllers = [];
+
+      let finalReport = '';
+      let highestRisk = 'info';
+
+      for (let i = 0; i < targets.length; i++) {
+        const target = targets[i];
+        const controller = new AbortController();
+        abortControllers.push(controller);
+
+        globalStatus.innerHTML += `<div class="status-item loading">⏳ (${i+1}/${targets.length}) Scanning ${target} ...</div>`;
+
+        try {
+          const resp = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target, scan_type: scanType }),
+            signal: controller.signal
+          });
+
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+
+          const data = await resp.json();
+          if (data.error) throw new Error(data.error);
+
+          finalReport += `\n\n### ===== Scan for ${target} =====\n\n${data.report || 'No findings.'}`;
+          globalStatus.innerHTML += `<div class="status-item done">✅ (${i+1}/${targets.length}) ${target} done – ${data.findings_count} findings</div>`;
+
+          const currentRisk = data.overall_risk || 'info';
+          if (currentRisk === 'high' || (currentRisk === 'medium' && highestRisk !== 'high')) {
+            highestRisk = currentRisk;
+          } else if (currentRisk === 'low' && highestRisk === 'info') {
+            highestRisk = 'low';
+          }
+        } catch (err) {
+          if (err.name === 'AbortError') {
+            globalStatus.innerHTML += `<div class="status-item fail">⏹ ${target} stopped by user.</div>`;
+            break;
+          } else {
+            globalStatus.innerHTML += `<div class="status-item fail">❌ ${target} failed: ${err.message}</div>`;
+          }
+        }
+      }
+
+      reportPre.textContent = finalReport || '[ No scans completed ]';
+      setRiskBadge(highestRisk);
+
+      scanAllBtn.disabled = false;
+      stopBtn.disabled = true;
+      abortControllers = [];
+    }
+
+    function stopAll() {
+      abortControllers.forEach(c => c.abort());
+      abortControllers = [];
+      document.getElementById('scanAllBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+    }
+  </script>
+</body>
+</html>
